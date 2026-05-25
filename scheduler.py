@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from database import Database
 
@@ -8,18 +8,19 @@ class ReminderScheduler:
     def __init__(self, db: Database):
         self.db = db
 
-    async def get_due_reminders(self, now_ist: datetime) -> list:
+    def get_due_reminders(self, now_ist: datetime) -> list:
         """
         Returns list of items that need a reminder sent RIGHT NOW.
         Each item gets a 'reminder_type' key: '30min' or '15min'
         """
         due = []
-        items = await self.db.get_items_needing_reminder(now_ist)
+        items = self.db.get_items_needing_reminder(now_ist)
 
         for item in items:
             if not item.get("time"):
                 continue
 
+            # Parse item datetime in IST
             try:
                 item_dt_str = f"{item['date']} {item['time']}"
                 item_dt     = IST.localize(
