@@ -21,7 +21,7 @@ IST = pytz.timezone("Asia/Kolkata")
 import os
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_KEY   = os.environ["OPENROUTER_KEY"]
-YOUR_CHAT_ID     = int(os.environ["YOUR_CHAT_ID"])   # your personal Telegram chat ID
+YOUR_CHAT_ID     = int(os.environ["YOUR_CHAT_ID"])
 
 # ── Init shared objects ───────────────────────────────────
 db        = Database()
@@ -51,26 +51,21 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # Handle every incoming text message
 # ─────────────────────────────────────────────────────────
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Only respond to YOUR messages
     if update.effective_user.id != YOUR_CHAT_ID:
         return
 
     user_text = update.message.text
     now_ist   = datetime.now(IST)
 
-    # Ask AI to understand the message
     result = await ai.process_message(user_text, now_ist)
-
     action = result.get("action")
 
-    # ── Save a new meeting/task ───────────────────────────
     if action == "save":
         item = result.get("item", {})
         db.save_item(item)
         reply = result.get("reply", "Got it! ✅")
         await update.message.reply_text(reply)
 
-    # ── Show today's schedule ─────────────────────────────
     elif action == "show_today":
         items = db.get_today_items(now_ist)
         if not items:
@@ -83,7 +78,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"{emoji} {time_str}  {it['title']}")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-    # ── Show all upcoming items ───────────────────────────
     elif action == "show_all":
         items = db.get_upcoming_items(now_ist)
         if not items:
@@ -96,7 +90,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"{emoji} {date_str.strip()}  {it['title']}")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-    # ── Delete an item ────────────────────────────────────
     elif action == "delete":
         title_hint = result.get("title_hint", "")
         deleted = db.delete_item_by_hint(title_hint)
@@ -105,7 +98,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Couldn't find that item to delete.")
 
-    # ── General chat / unknown ────────────────────────────
     else:
         reply = result.get("reply", "I'm here! Tell me about a meeting or task to save.")
         await update.message.reply_text(reply)
@@ -114,8 +106,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # Send daily summary at 10 PM IST
 # ─────────────────────────────────────────────────────────
 async def send_daily_summary(app: Application):
-    now_ist   = datetime.now(IST)
-    tomorrow  = db.get_tomorrow_items(now_ist)
+    now_ist    = datetime.now(IST)
+    tomorrow   = db.get_tomorrow_items(now_ist)
     today_done = db.get_today_items(now_ist)
 
     lines = ["🌙 *Daily Summary*\n"]
@@ -142,51 +134,53 @@ async def send_daily_summary(app: Application):
     )
 
 # ─────────────────────────────────────────────────────────
-# Background loop: check reminders + daily summary
+# Background loop: reminders + daily summary
 # ─────────────────────────────────────────────────────────
 async def background_loop(app: Application):
     daily_summary_sent_date = None
 
     while True:
-        now_ist = datetime.now(IST)
+        try:
+            now_ist = datetime.now(IST)
 
-        # Check reminders (runs every 60 seconds)
-        due = scheduler.get_due_reminders(now_ist)
-        for item in due:
-            msg = f"⏰ *Reminder:* {item['title']}\n🕐 {item['time']} today"
-            await app.bot.send_message(
-                chat_id=YOUR_CHAT_ID,
-                text=msg,
-                parse_mode="Markdown"
-            )
-            db.mark_reminder_sent(item["id"], item["reminder_type"])
+            due = scheduler.get_due_reminders(now_ist)
+            for item in due:
+                msg = f"⏰ *Reminder:* {item['title']}\n🕐 {item['time']} today"
+                await app.bot.send_message(
+                    chat_id=YOUR_CHAT_ID,
+                    text=msg,
+                    parse_mode="Markdown"
+                )
+                db.mark_reminder_sent(item["id"], item["reminder_type"])
 
-        # Daily summary at 10 PM IST
-        if now_ist.hour == 22 and now_ist.minute == 0:
-            today_str = now_ist.strftime("%Y-%m-%d")
-            if daily_summary_sent_date != today_str:
-                daily_summary_sent_date = today_str
-                await send_daily_summary(app)
+            if now_ist.hour == 22 and now_ist.minute == 0:
+                today_str = now_ist.strftime("%Y-%m-%d")
+                if daily_summary_sent_date != today_str:
+                    daily_summary_sent_date = today_str
+                    await send_daily_summary(app)
 
-        await asyncio.sleep(60)  # check every minute
+        except Exception as e:
+            logger.error(f"Background loop error: {e}")
+
+        await asyncio.sleep(60)
 
 # ─────────────────────────────────────────────────────────
-# Main entry point
+# Main entry point — fully async, compatible with Python 3.14
 # ─────────────────────────────────────────────────────────
-def main():
+async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Start background reminder loop
-    async def post_init(application: Application):
-        asyncio.create_task(background_loop(application))
-
-    app.post_init = post_init
-
     logger.info("Bot is running...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    async with app:
+        await app.start()
+        await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+
+        # Start background loop alongside polling
+        await background_loop(app)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
