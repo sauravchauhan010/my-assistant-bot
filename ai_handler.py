@@ -2,9 +2,9 @@ import httpx
 import json
 from datetime import datetime
 
-OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
-WHISPER_URL     = "https://openrouter.ai/api/v1/audio/transcriptions"
-MODEL           = "google/gemini-3.1-flash-lite"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+MODEL = "google/gemini-3.1-flash-lite"
 
 SYSTEM_PROMPT = """You are a smart personal assistant that understands natural language messages about meetings, tasks, and schedules. You remember everything the user tells you during the conversation — their name, preferences, and any personal details they share.
 
@@ -60,17 +60,18 @@ class AIHandler:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.client  = httpx.AsyncClient(timeout=30)
-        # Keeps last 20 messages so AI remembers the full conversation
         self.history: list = []
+
+        # Groq key for voice transcription
+        import os
+        self.groq_key = os.environ.get("GROQ_KEY", "")
 
     async def process_message(self, user_text: str, now_ist: datetime) -> dict:
         date_context = now_ist.strftime("%A, %d %B %Y, %I:%M %p IST")
         user_content = f"Current date/time: {date_context}\n\nUser message: {user_text}"
 
-        # Add this message to history
         self.history.append({"role": "user", "content": user_content})
 
-        # Keep only last 20 messages to avoid token overflow
         if len(self.history) > 20:
             self.history = self.history[-20:]
 
@@ -87,7 +88,7 @@ class AIHandler:
                     "model": MODEL,
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        *self.history    # full history so AI remembers everything
+                        *self.history
                     ],
                     "max_tokens": 500,
                     "temperature": 0.2
@@ -103,10 +104,7 @@ class AIHandler:
             raw = raw.strip()
 
             result = json.loads(raw)
-
-            # Save assistant reply to history too
             self.history.append({"role": "assistant", "content": raw})
-
             return result
 
         except Exception as e:
@@ -116,19 +114,27 @@ class AIHandler:
             }
 
     async def transcribe_voice(self, audio_bytes: bytes) -> str:
-        """Send OGG voice bytes to Whisper for transcription"""
+        """Transcribe voice using Groq Whisper — free and fast"""
         try:
             response = await self.client.post(
-                WHISPER_URL,
+                GROQ_WHISPER_URL,
                 headers={
-                    "Authorization": f"Bearer {self.api_key}",
+                    "Authorization": f"Bearer {self.groq_key}",
                 },
                 files={
                     "file": ("voice.ogg", audio_bytes, "audio/ogg"),
-                    "model": (None, "openai/whisper-large-v3"),
+                },
+                data={
+                    "model": "whisper-large-v3",
+                    "language": "en",        # change to "hi" if you speak Hindi
+                    "response_format": "json"
                 },
                 timeout=30
             )
+
+            if response.status_code != 200:
+                raise Exception(f"Groq error {response.status_code}: {response.text}")
+
             data = response.json()
             return data.get("text", "").strip()
 
