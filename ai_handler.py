@@ -2,8 +2,9 @@ import httpx
 import json
 from datetime import datetime
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL          = "google/gemini-3.1-flash-lite"
+OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
+WHISPER_URL     = "https://openrouter.ai/api/v1/audio/transcriptions"
+MODEL           = "google/gemini-3.1-flash-lite"
 
 SYSTEM_PROMPT = """You are a smart personal assistant that understands natural language messages about meetings, tasks, and schedules.
 
@@ -31,11 +32,8 @@ For action "save", return:
   "reply": "friendly confirmation message like a real assistant would say"
 }
 
-For action "show_today":
-{ "action": "show_today" }
-
-For action "show_all":
-{ "action": "show_all" }
+For action "show_today": { "action": "show_today" }
+For action "show_all":   { "action": "show_all" }
 
 For action "delete":
 {
@@ -50,10 +48,10 @@ For action "chat":
 }
 
 Rules:
-- Understand relative dates: "today", "tomorrow", "Friday", "next week Monday" etc. — resolve them to YYYY-MM-DD using the provided current date
-- Understand times like "3pm", "11:30", "half past 2", "morning" (use 09:00), "evening" (use 18:00), "night" (use 20:00)
-- If no date is given but a time is, assume today
-- Be friendly and natural in reply messages — like a real personal assistant
+- Understand relative dates: today, tomorrow, Friday, next week Monday — resolve to YYYY-MM-DD
+- Understand times like 3pm, 11:30, half past 2, morning (09:00), evening (18:00), night (20:00)
+- If no date given but time is, assume today
+- Be friendly and natural in reply messages
 - Return ONLY valid JSON, nothing else"""
 
 
@@ -64,7 +62,6 @@ class AIHandler:
 
     async def process_message(self, user_text: str, now_ist: datetime) -> dict:
         date_context = now_ist.strftime("%A, %d %B %Y, %I:%M %p IST")
-
         user_content = f"Current date/time: {date_context}\n\nUser message: {user_text}"
 
         try:
@@ -86,22 +83,37 @@ class AIHandler:
                     "temperature": 0.2
                 }
             )
+            data = response.json()
+            raw  = data["choices"][0]["message"]["content"].strip()
 
-            data    = response.json()
-            raw     = data["choices"][0]["message"]["content"].strip()
-
-            # Strip markdown code fences if model added them
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
-            raw = raw.strip()
-
-            result = json.loads(raw)
-            return result
+            return json.loads(raw.strip())
 
         except Exception as e:
             return {
                 "action": "chat",
                 "reply": f"Sorry, I had trouble understanding that. Could you rephrase? (Error: {str(e)[:80]})"
             }
+
+    async def transcribe_voice(self, audio_bytes: bytes) -> str:
+        """Send OGG voice bytes to Whisper for transcription"""
+        try:
+            response = await self.client.post(
+                WHISPER_URL,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                files={
+                    "file": ("voice.ogg", audio_bytes, "audio/ogg"),
+                    "model": (None, "openai/whisper-large-v3"),
+                },
+                timeout=30
+            )
+            data = response.json()
+            return data.get("text", "").strip()
+
+        except Exception as e:
+            raise Exception(f"Transcription failed: {e}")
