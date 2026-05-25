@@ -90,11 +90,11 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
     action = result.get("action")
 
     if action == "save":
-        await db.save_item(result.get("item", {}))  # FIX: was missing await
+        db.save_item(result.get("item", {}))
         await update.message.reply_text(result.get("reply", "Got it! ✅"))
 
     elif action == "show_today":
-        items = await db.get_today_items(now_ist)  # FIX: was missing await
+        items = db.get_today_items(now_ist)
         if not items:
             await update.message.reply_text("📭 Nothing scheduled for today!")
         else:
@@ -106,19 +106,19 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif action == "show_all":
-        items = await db.get_upcoming_items(now_ist)  # FIX: was missing await
+        items = db.get_upcoming_items(now_ist)
         if not items:
             await update.message.reply_text("📭 No upcoming meetings or tasks!")
         else:
             lines = ["📋 *All upcoming:*\n"]
             for i, it in enumerate(items, 1):
                 emoji    = "📌" if it["type"] == "task" else "🗓"
-                date_str = f"{it.get('date','')} {it.get('time','')}" .strip()
+                date_str = f"{it.get('date','')} {it.get('time','')}".strip()
                 lines.append(f"{i}. {emoji} {date_str}  {it['title']}")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif action == "delete":
-        deleted = await db.delete_item_by_hint(result.get("title_hint", ""))  # FIX: was missing await
+        deleted = db.delete_item_by_hint(result.get("title_hint", ""))
         if deleted:
             await update.message.reply_text(f"🗑 Deleted: *{deleted}*", parse_mode="Markdown")
         else:
@@ -132,8 +132,8 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
 # ─────────────────────────────────────────────────────────
 async def send_daily_summary(app: Application):
     now_ist    = datetime.now(IST)
-    today      = await db.get_today_items(now_ist)    # FIX: was missing await
-    tomorrow   = await db.get_tomorrow_items(now_ist) # FIX: was missing await
+    today      = db.get_today_items(now_ist)
+    tomorrow   = db.get_tomorrow_items(now_ist)
     lines      = ["🌙 *Daily Summary*\n"]
 
     if today:
@@ -167,7 +167,7 @@ async def background_loop(app: Application):
         try:
             now_ist = datetime.now(IST)
 
-            for item in await scheduler.get_due_reminders(now_ist):  # FIX: was missing await
+            for item in scheduler.get_due_reminders(now_ist):
                 mins  = "30 minutes" if item["reminder_type"] == "30min" else "15 minutes"
                 emoji = "📌" if item["type"] == "task" else "🗓"
                 msg   = (
@@ -180,10 +180,9 @@ async def background_loop(app: Application):
                     text=msg,
                     parse_mode="Markdown"
                 )
-                await db.mark_reminder_sent(item["id"], item["reminder_type"])  # FIX: was missing await
+                db.mark_reminder_sent(item["id"], item["reminder_type"])
 
-            # FIX: widened window to minute < 5 so a loop hiccup can't skip the summary
-            if now_ist.hour == 22 and now_ist.minute < 5:
+            if now_ist.hour == 22 and now_ist.minute == 0:
                 today_str = now_ist.strftime("%Y-%m-%d")
                 if daily_summary_sent_date != today_str:
                     daily_summary_sent_date = today_str
