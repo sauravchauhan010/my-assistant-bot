@@ -8,19 +8,13 @@ IST = pytz.timezone("Asia/Kolkata")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://euelfvzjmvmpnohtnebl.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation"
-}
-
 BASE = f"{SUPABASE_URL}/rest/v1/items"
 
 
 class Database:
     def __init__(self):
-        self.client = httpx.Client(timeout=10)
+        # Use AsyncClient to avoid blocking the event loop
+        self.client = httpx.AsyncClient(timeout=10)
 
     def _headers(self):
         key = os.environ.get("SUPABASE_KEY", SUPABASE_KEY)
@@ -32,7 +26,7 @@ class Database:
         }
 
     # ── Save a new item ───────────────────────────────────
-    def save_item(self, item: dict):
+    async def save_item(self, item: dict):
         payload = {
             "title":            item.get("title", "Untitled"),
             "type":             item.get("type", "meeting"),
@@ -43,12 +37,12 @@ class Database:
             "reminder_15_sent": 0,
             "created_at":       datetime.now(IST).strftime("%Y-%m-%d %H:%M")
         }
-        self.client.post(BASE, headers=self._headers(), json=payload)
+        await self.client.post(BASE, headers=self._headers(), json=payload)
 
     # ── Get today's items ─────────────────────────────────
-    def get_today_items(self, now_ist: datetime) -> list:
+    async def get_today_items(self, now_ist: datetime) -> list:
         today = now_ist.strftime("%Y-%m-%d")
-        r = self.client.get(
+        r = await self.client.get(
             BASE,
             headers=self._headers(),
             params={"date": f"eq.{today}", "order": "time.asc"}
@@ -56,9 +50,9 @@ class Database:
         return r.json() if r.status_code == 200 else []
 
     # ── Get tomorrow's items ──────────────────────────────
-    def get_tomorrow_items(self, now_ist: datetime) -> list:
+    async def get_tomorrow_items(self, now_ist: datetime) -> list:
         tomorrow = (now_ist + timedelta(days=1)).strftime("%Y-%m-%d")
-        r = self.client.get(
+        r = await self.client.get(
             BASE,
             headers=self._headers(),
             params={"date": f"eq.{tomorrow}", "order": "time.asc"}
@@ -66,9 +60,9 @@ class Database:
         return r.json() if r.status_code == 200 else []
 
     # ── Get all upcoming items ────────────────────────────
-    def get_upcoming_items(self, now_ist: datetime) -> list:
+    async def get_upcoming_items(self, now_ist: datetime) -> list:
         today = now_ist.strftime("%Y-%m-%d")
-        r = self.client.get(
+        r = await self.client.get(
             BASE,
             headers=self._headers(),
             params={"date": f"gte.{today}", "order": "date.asc,time.asc"}
@@ -76,9 +70,9 @@ class Database:
         return r.json() if r.status_code == 200 else []
 
     # ── Get items needing a reminder ──────────────────────
-    def get_items_needing_reminder(self, now_ist: datetime) -> list:
+    async def get_items_needing_reminder(self, now_ist: datetime) -> list:
         today = now_ist.strftime("%Y-%m-%d")
-        r = self.client.get(
+        r = await self.client.get(
             BASE,
             headers=self._headers(),
             params={
@@ -91,9 +85,9 @@ class Database:
         return r.json() if r.status_code == 200 else []
 
     # ── Mark reminder as sent ─────────────────────────────
-    def mark_reminder_sent(self, item_id: int, reminder_type: str):
+    async def mark_reminder_sent(self, item_id: int, reminder_type: str):
         field = "reminder_30_sent" if reminder_type == "30min" else "reminder_15_sent"
-        self.client.patch(
+        await self.client.patch(
             BASE,
             headers=self._headers(),
             params={"id": f"eq.{item_id}"},
@@ -101,9 +95,8 @@ class Database:
         )
 
     # ── Delete item by title hint ─────────────────────────
-    def delete_item_by_hint(self, hint: str) -> str | None:
-        # Find matching item first
-        r = self.client.get(
+    async def delete_item_by_hint(self, hint: str) -> str | None:
+        r = await self.client.get(
             BASE,
             headers=self._headers(),
             params={"title": f"ilike.*{hint}*", "limit": "1"}
@@ -113,7 +106,7 @@ class Database:
             return None
 
         item = items[0]
-        self.client.delete(
+        await self.client.delete(
             BASE,
             headers=self._headers(),
             params={"id": f"eq.{item['id']}"}
