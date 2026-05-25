@@ -27,7 +27,7 @@ RENDER_URL     = os.environ["RENDER_URL"]   # e.g. https://my-assistant-bot.onre
 PORT           = int(os.environ.get("PORT", 8080))
 
 WEBHOOK_PATH   = f"/webhook/{TELEGRAM_TOKEN}"
-WEBHOOK_URL    = f"{RENDER_URL}{WEBHOOK_PATH}"
+WEBHOOK_URL    = f"{RENDER_URL.rstrip('/')}{WEBHOOK_PATH}"
 
 # ── Init shared objects ───────────────────────────────────
 db        = Database()
