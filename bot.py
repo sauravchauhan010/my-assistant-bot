@@ -10,7 +10,6 @@ from database import Database
 from ai_handler import AIHandler
 from scheduler import ReminderScheduler
 
-# ── Logging ──────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -19,23 +18,21 @@ logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# ── Config from environment ───────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 YOUR_CHAT_ID   = int(os.environ["YOUR_CHAT_ID"])
-RENDER_URL     = os.environ["RENDER_URL"]   # e.g. https://my-assistant-bot.onrender.com
+RENDER_URL     = os.environ["RENDER_URL"]
 PORT           = int(os.environ.get("PORT", 8080))
 
 WEBHOOK_PATH   = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL    = f"{RENDER_URL.rstrip('/')}{WEBHOOK_PATH}"
 
-# ── Init shared objects ───────────────────────────────────
 db        = Database()
 ai        = AIHandler(OPENROUTER_KEY)
 scheduler = ReminderScheduler(db)
 
 # ─────────────────────────────────────────────────────────
-# /start command
+# /start
 # ─────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != YOUR_CHAT_ID:
@@ -58,10 +55,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != YOUR_CHAT_ID:
         return
-
-    user_text = update.message.text
-    now_ist   = datetime.now(IST)
-    await process_and_reply(update, user_text, now_ist)
+    await process_and_reply(update, update.message.text, datetime.now(IST))
 
 # ─────────────────────────────────────────────────────────
 # Handle voice messages
@@ -73,28 +67,23 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎤 Got your voice note, transcribing...")
 
     try:
-        # Download voice file from Telegram
-        voice_file = await ctx.bot.get_file(update.message.voice.file_id)
+        voice_file  = await ctx.bot.get_file(update.message.voice.file_id)
         voice_bytes = await voice_file.download_as_bytearray()
+        text        = await ai.transcribe_voice(bytes(voice_bytes))
 
-        # Transcribe using OpenRouter Whisper
-        transcribed_text = await ai.transcribe_voice(bytes(voice_bytes))
-
-        if not transcribed_text:
-            await update.message.reply_text("Sorry, couldn't understand the voice note. Please try again.")
+        if not text:
+            await update.message.reply_text("Sorry, couldn't understand. Please try again.")
             return
 
-        await update.message.reply_text(f"📝 I heard: _{transcribed_text}_", parse_mode="Markdown")
-
-        now_ist = datetime.now(IST)
-        await process_and_reply(update, transcribed_text, now_ist)
+        await update.message.reply_text(f"📝 I heard: _{text}_", parse_mode="Markdown")
+        await process_and_reply(update, text, datetime.now(IST))
 
     except Exception as e:
         logger.error(f"Voice error: {e}")
         await update.message.reply_text("Sorry, voice processing failed. Try typing instead.")
 
 # ─────────────────────────────────────────────────────────
-# Shared logic: process text and send reply
+# Core logic — process message and reply
 # ─────────────────────────────────────────────────────────
 async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
     result = await ai.process_message(user_text, now_ist)
@@ -110,9 +99,10 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
             await update.message.reply_text("📭 Nothing scheduled for today!")
         else:
             lines = ["📅 *Today's schedule:*\n"]
-            for it in items:
+            for i, it in enumerate(items, 1):
                 emoji = "📌" if it["type"] == "task" else "🗓"
-                lines.append(f"{emoji} {it.get('time','')}  {it['title']}")
+                time_str = it.get("time", "")
+                lines.append(f"{i}. {emoji} {time_str}  {it['title']}")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif action == "show_all":
@@ -121,10 +111,10 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
             await update.message.reply_text("📭 No upcoming meetings or tasks!")
         else:
             lines = ["📋 *All upcoming:*\n"]
-            for it in items:
-                emoji = "📌" if it["type"] == "task" else "🗓"
+            for i, it in enumerate(items, 1):
+                emoji    = "📌" if it["type"] == "task" else "🗓"
                 date_str = f"{it.get('date','')} {it.get('time','')}".strip()
-                lines.append(f"{emoji} {date_str}  {it['title']}")
+                lines.append(f"{i}. {emoji} {date_str}  {it['title']}")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif action == "delete":
@@ -138,44 +128,56 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
         await update.message.reply_text(result.get("reply", "I'm here! Tell me about a meeting or task."))
 
 # ─────────────────────────────────────────────────────────
-# Daily summary
+# Daily summary at 10 PM IST
 # ─────────────────────────────────────────────────────────
 async def send_daily_summary(app: Application):
     now_ist    = datetime.now(IST)
+    today      = db.get_today_items(now_ist)
     tomorrow   = db.get_tomorrow_items(now_ist)
-    today_done = db.get_today_items(now_ist)
     lines      = ["🌙 *Daily Summary*\n"]
 
-    if today_done:
+    if today:
         lines.append("*Today's items:*")
-        for it in today_done:
+        for i, it in enumerate(today, 1):
             emoji = "📌" if it["type"] == "task" else "🗓"
-            lines.append(f"  {emoji} {it.get('time','')}  {it['title']}")
+            lines.append(f"  {i}. {emoji} {it.get('time','')}  {it['title']}")
         lines.append("")
 
     if tomorrow:
         lines.append("*Tomorrow:*")
-        for it in tomorrow:
+        for i, it in enumerate(tomorrow, 1):
             emoji = "📌" if it["type"] == "task" else "🗓"
-            lines.append(f"  {emoji} {it.get('time','')}  {it['title']}")
+            lines.append(f"  {i}. {emoji} {it.get('time','')}  {it['title']}")
     else:
         lines.append("*Tomorrow:* Nothing scheduled yet 😌")
 
-    await app.bot.send_message(chat_id=YOUR_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
+    await app.bot.send_message(
+        chat_id=YOUR_CHAT_ID,
+        text="\n".join(lines),
+        parse_mode="Markdown"
+    )
 
 # ─────────────────────────────────────────────────────────
-# Background loop: reminders + daily summary
+# Background loop — reminders every 60s + daily summary
 # ─────────────────────────────────────────────────────────
 async def background_loop(app: Application):
     daily_summary_sent_date = None
+
     while True:
         try:
             now_ist = datetime.now(IST)
 
             for item in scheduler.get_due_reminders(now_ist):
+                mins  = "30 minutes" if item["reminder_type"] == "30min" else "15 minutes"
+                emoji = "📌" if item["type"] == "task" else "🗓"
+                msg   = (
+                    f"⏰ *Reminder — {mins} to go!*\n\n"
+                    f"{emoji} *{item['title']}*\n"
+                    f"🕐 Scheduled at {item['time']} today"
+                )
                 await app.bot.send_message(
                     chat_id=YOUR_CHAT_ID,
-                    text=f"⏰ *Reminder:* {item['title']}\n🕐 {item['time']} today",
+                    text=msg,
                     parse_mode="Markdown"
                 )
                 db.mark_reminder_sent(item["id"], item["reminder_type"])
@@ -192,7 +194,7 @@ async def background_loop(app: Application):
         await asyncio.sleep(60)
 
 # ─────────────────────────────────────────────────────────
-# Main — webhook mode + HTTP server for Render
+# Main — webhook + HTTP server
 # ─────────────────────────────────────────────────────────
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -201,13 +203,11 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    # Health check endpoint so Render is happy
     async def health(request):
         return web.Response(text="OK")
 
-    # Webhook endpoint — Telegram posts updates here
     async def webhook(request):
-        data = await request.json()
+        data   = await request.json()
         update = Update.de_json(data, app.bot)
         await app.process_update(update)
         return web.Response(text="OK")
@@ -218,21 +218,17 @@ async def main():
 
     async with app:
         await app.initialize()
-        # Register webhook with Telegram
         await app.bot.set_webhook(url=WEBHOOK_URL)
-        logger.info(f"Webhook set to: {WEBHOOK_URL}")
+        logger.info(f"Webhook set: {WEBHOOK_URL}")
 
-        # Start background reminder loop
         asyncio.create_task(background_loop(app))
 
-        # Start HTTP server
         runner = web.AppRunner(web_app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
         logger.info(f"Server running on port {PORT}")
 
-        # Run forever
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
