@@ -4,9 +4,9 @@ from datetime import datetime
 
 OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
 WHISPER_URL     = "https://openrouter.ai/api/v1/audio/transcriptions"
-MODEL           = "google/gemini-2.0-flash-lite"  # FIX: corrected model name
+MODEL           = "google/gemini-3.1-flash-lite"
 
-SYSTEM_PROMPT = """You are a smart personal assistant that understands natural language messages about meetings, tasks, and schedules.
+SYSTEM_PROMPT = """You are a smart personal assistant that understands natural language messages about meetings, tasks, and schedules. You remember everything the user tells you during the conversation — their name, preferences, and any personal details they share.
 
 Your job is to analyze a user's message and return a JSON response ONLY — no explanation, no markdown, just raw JSON.
 
@@ -29,7 +29,7 @@ For action "save", return:
     "time": "HH:MM" (24-hour format, null if no time given),
     "note": "any extra detail or null"
   },
-  "reply": "friendly confirmation message like a real assistant would say"
+  "reply": "friendly confirmation message like a real assistant, use user name if you know it"
 }
 
 For action "show_today": { "action": "show_today" }
@@ -44,10 +44,11 @@ For action "delete":
 For action "chat":
 {
   "action": "chat",
-  "reply": "friendly natural response"
+  "reply": "friendly natural response — use the user's name if you know it"
 }
 
 Rules:
+- Remember everything shared in conversation history — name, preferences, personal details
 - Understand relative dates: today, tomorrow, Friday, next week Monday — resolve to YYYY-MM-DD
 - Understand times like 3pm, 11:30, half past 2, morning (09:00), evening (18:00), night (20:00)
 - If no date given but time is, assume today
@@ -59,10 +60,19 @@ class AIHandler:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.client  = httpx.AsyncClient(timeout=30)
+        # Keeps last 20 messages so AI remembers the full conversation
+        self.history: list = []
 
     async def process_message(self, user_text: str, now_ist: datetime) -> dict:
         date_context = now_ist.strftime("%A, %d %B %Y, %I:%M %p IST")
         user_content = f"Current date/time: {date_context}\n\nUser message: {user_text}"
+
+        # Add this message to history
+        self.history.append({"role": "user", "content": user_content})
+
+        # Keep only last 20 messages to avoid token overflow
+        if len(self.history) > 20:
+            self.history = self.history[-20:]
 
         try:
             response = await self.client.post(
@@ -77,7 +87,7 @@ class AIHandler:
                     "model": MODEL,
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user",   "content": user_content}
+                        *self.history    # full history so AI remembers everything
                     ],
                     "max_tokens": 500,
                     "temperature": 0.2
@@ -90,7 +100,14 @@ class AIHandler:
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
-            return json.loads(raw.strip())
+            raw = raw.strip()
+
+            result = json.loads(raw)
+
+            # Save assistant reply to history too
+            self.history.append({"role": "assistant", "content": raw})
+
+            return result
 
         except Exception as e:
             return {
