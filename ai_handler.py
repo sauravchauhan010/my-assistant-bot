@@ -4,7 +4,7 @@ from datetime import datetime
 
 OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
 WHISPER_URL     = "https://openrouter.ai/api/v1/audio/transcriptions"
-MODEL           = "google/gemini-3.1-flash-lite"
+MODEL           = "google/gemini-2.0-flash-lite"  # FIX: corrected model name
 
 SYSTEM_PROMPT = """You are a smart personal assistant that understands natural language messages about meetings, tasks, and schedules.
 
