@@ -119,3 +119,19 @@ class Database:
             params={"id": f"eq.{item['id']}"}
         )
         return item["title"]
+
+    # ── Delete by exact ID ────────────────────────────────
+    def delete_by_id(self, item_id: int):
+        self.client.delete(
+            BASE,
+            headers=self._headers(),
+            params={"id": f"eq.{item_id}"}
+        )
+
+    # ── Clear all items ───────────────────────────────────
+    def clear_all(self):
+        self.client.delete(
+            BASE,
+            headers=self._headers(),
+            params={"id": "gte.0"}
+        )
