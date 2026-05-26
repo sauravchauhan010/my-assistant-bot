@@ -24,12 +24,15 @@ YOUR_CHAT_ID   = int(os.environ["YOUR_CHAT_ID"])
 RENDER_URL     = os.environ["RENDER_URL"]
 PORT           = int(os.environ.get("PORT", 8080))
 
-WEBHOOK_PATH   = f"/webhook/{TELEGRAM_TOKEN}"
-WEBHOOK_URL    = f"{RENDER_URL.rstrip('/')}{WEBHOOK_PATH}"
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+WEBHOOK_URL  = f"{RENDER_URL.rstrip('/')}{WEBHOOK_PATH}"
 
 db        = Database()
 ai        = AIHandler(OPENROUTER_KEY)
 scheduler = ReminderScheduler(db)
+
+# Temp store for delete confirmation: {chat_id: [list of items]}
+pending_delete = {}
 
 # ─────────────────────────────────────────────────────────
 # /start
@@ -39,15 +42,132 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         "👋 Hey! I'm your personal assistant.\n\n"
-        "Talk to me naturally or send a 🎤 voice message:\n"
-        "• *Meeting with client tomorrow at 3pm*\n"
-        "• *Call doctor on Friday 11am*\n"
-        "• *What's on my schedule today?*\n"
-        "• *Show all my tasks*\n\n"
-        "I'll remind you 30 min and 15 min before every meeting "
-        "and send a daily summary at 10 PM 🕙",
+        "Just talk to me naturally or use commands:\n"
+        "/today — today's schedule\n"
+        "/all — all upcoming meetings\n"
+        "/delete — delete a meeting\n"
+        "/done — mark a task as done\n"
+        "/clear — clear everything\n"
+        "/summary — get daily summary now\n"
+        "/help — show all commands\n\n"
+        "Or just say: _Meeting with client tomorrow at 3pm_ 🎤",
         parse_mode="Markdown"
     )
+
+# ─────────────────────────────────────────────────────────
+# /help
+# ─────────────────────────────────────────────────────────
+async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    await update.message.reply_text(
+        "📖 *All Commands:*\n\n"
+        "/today — show today's schedule\n"
+        "/all — show all upcoming meetings & tasks\n"
+        "/delete — pick and delete a meeting or task\n"
+        "/done — mark a task as completed\n"
+        "/clear — delete ALL meetings and tasks\n"
+        "/summary — get your daily summary right now\n"
+        "/help — show this message\n\n"
+        "💬 Or just talk naturally — I understand plain English & Hindi too!",
+        parse_mode="Markdown"
+    )
+
+# ─────────────────────────────────────────────────────────
+# /today
+# ─────────────────────────────────────────────────────────
+async def today_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    now_ist = datetime.now(IST)
+    items   = db.get_today_items(now_ist)
+    if not items:
+        await update.message.reply_text("📭 Nothing scheduled for today!")
+    else:
+        lines = ["📅 *Today's schedule:*\n"]
+        for i, it in enumerate(items, 1):
+            emoji = "📌" if it["type"] == "task" else "🗓"
+            lines.append(f"{i}. {emoji} {it.get('time','')}  {it['title']}")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+# ─────────────────────────────────────────────────────────
+# /all
+# ─────────────────────────────────────────────────────────
+async def all_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    now_ist = datetime.now(IST)
+    items   = db.get_upcoming_items(now_ist)
+    if not items:
+        await update.message.reply_text("📭 No upcoming meetings or tasks!")
+    else:
+        lines = ["📋 *All upcoming:*\n"]
+        for i, it in enumerate(items, 1):
+            emoji    = "📌" if it["type"] == "task" else "🗓"
+            date_str = f"{it.get('date','')} {it.get('time','')}".strip()
+            lines.append(f"{i}. {emoji} {date_str}  {it['title']}")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+# ─────────────────────────────────────────────────────────
+# /delete — show numbered list, wait for number reply
+# ─────────────────────────────────────────────────────────
+async def delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    now_ist = datetime.now(IST)
+    items   = db.get_upcoming_items(now_ist)
+    if not items:
+        await update.message.reply_text("📭 Nothing to delete!")
+        return
+
+    # Store list in memory for this user
+    pending_delete[YOUR_CHAT_ID] = items
+
+    lines = ["🗑 *Which one to delete?*\nReply with the number:\n"]
+    for i, it in enumerate(items, 1):
+        emoji    = "📌" if it["type"] == "task" else "🗓"
+        date_str = f"{it.get('date','')} {it.get('time','')}".strip()
+        lines.append(f"{i}. {emoji} {date_str}  {it['title']}")
+    lines.append("\n0. Cancel")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+# ─────────────────────────────────────────────────────────
+# /done — mark task complete (shows list to pick from)
+# ─────────────────────────────────────────────────────────
+async def done_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    now_ist = datetime.now(IST)
+    items   = db.get_today_items(now_ist)
+    if not items:
+        await update.message.reply_text("📭 No tasks for today!")
+        return
+
+    pending_delete[YOUR_CHAT_ID] = items  # reuse same flow
+
+    lines = ["✅ *Which task is done?*\nReply with the number:\n"]
+    for i, it in enumerate(items, 1):
+        emoji = "📌" if it["type"] == "task" else "🗓"
+        lines.append(f"{i}. {emoji} {it.get('time','')}  {it['title']}")
+    lines.append("\n0. Cancel")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+# ─────────────────────────────────────────────────────────
+# /clear — delete everything
+# ─────────────────────────────────────────────────────────
+async def clear_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    db.clear_all()
+    await update.message.reply_text("🗑 All meetings and tasks cleared!")
+
+# ─────────────────────────────────────────────────────────
+# /summary — send daily summary right now
+# ─────────────────────────────────────────────────────────
+async def summary_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_CHAT_ID:
+        return
+    await send_daily_summary(ctx.application)
 
 # ─────────────────────────────────────────────────────────
 # Handle text messages
@@ -55,7 +175,34 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != YOUR_CHAT_ID:
         return
-    await process_and_reply(update, update.message.text, datetime.now(IST))
+
+    text = update.message.text.strip()
+
+    # Check if user is replying with a number for delete/done
+    if YOUR_CHAT_ID in pending_delete and text.isdigit():
+        items = pending_delete[YOUR_CHAT_ID]
+        num   = int(text)
+
+        if num == 0:
+            del pending_delete[YOUR_CHAT_ID]
+            await update.message.reply_text("Cancelled. ✅")
+            return
+
+        if 1 <= num <= len(items):
+            item = items[num - 1]
+            db.delete_by_id(item["id"])
+            del pending_delete[YOUR_CHAT_ID]
+            emoji = "📌" if item["type"] == "task" else "🗓"
+            await update.message.reply_text(
+                f"✅ Removed: {emoji} *{item['title']}*",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(f"Please reply with a number between 1 and {len(items)}, or 0 to cancel.")
+        return
+
+    # Normal message — process with AI
+    await process_and_reply(update, text, datetime.now(IST))
 
 # ─────────────────────────────────────────────────────────
 # Handle voice messages
@@ -83,7 +230,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sorry, voice processing failed. Try typing instead.")
 
 # ─────────────────────────────────────────────────────────
-# Core logic — process message and reply
+# Core: process text and reply
 # ─────────────────────────────────────────────────────────
 async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
     result = await ai.process_message(user_text, now_ist)
@@ -101,8 +248,7 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
             lines = ["📅 *Today's schedule:*\n"]
             for i, it in enumerate(items, 1):
                 emoji = "📌" if it["type"] == "task" else "🗓"
-                time_str = it.get("time", "")
-                lines.append(f"{i}. {emoji} {time_str}  {it['title']}")
+                lines.append(f"{i}. {emoji} {it.get('time','')}  {it['title']}")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif action == "show_all":
@@ -118,23 +264,20 @@ async def process_and_reply(update: Update, user_text: str, now_ist: datetime):
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif action == "delete":
-        deleted = db.delete_item_by_hint(result.get("title_hint", ""))
-        if deleted:
-            await update.message.reply_text(f"🗑 Deleted: *{deleted}*", parse_mode="Markdown")
-        else:
-            await update.message.reply_text("Couldn't find that item to delete.")
+        # AI-detected delete — fall back to list method
+        await delete_cmd(update, None)
 
     else:
         await update.message.reply_text(result.get("reply", "I'm here! Tell me about a meeting or task."))
 
 # ─────────────────────────────────────────────────────────
-# Daily summary at 10 PM IST
+# Daily summary
 # ─────────────────────────────────────────────────────────
 async def send_daily_summary(app: Application):
-    now_ist    = datetime.now(IST)
-    today      = db.get_today_items(now_ist)
-    tomorrow   = db.get_tomorrow_items(now_ist)
-    lines      = ["🌙 *Daily Summary*\n"]
+    now_ist  = datetime.now(IST)
+    today    = db.get_today_items(now_ist)
+    tomorrow = db.get_tomorrow_items(now_ist)
+    lines    = ["🌙 *Daily Summary*\n"]
 
     if today:
         lines.append("*Today's items:*")
@@ -158,11 +301,10 @@ async def send_daily_summary(app: Application):
     )
 
 # ─────────────────────────────────────────────────────────
-# Background loop — reminders every 60s + daily summary
+# Background loop
 # ─────────────────────────────────────────────────────────
 async def background_loop(app: Application):
     daily_summary_sent_date = None
-
     while True:
         try:
             now_ist = datetime.now(IST)
@@ -194,12 +336,19 @@ async def background_loop(app: Application):
         await asyncio.sleep(60)
 
 # ─────────────────────────────────────────────────────────
-# Main — webhook + HTTP server
+# Main
 # ─────────────────────────────────────────────────────────
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start",   start))
+    app.add_handler(CommandHandler("help",    help_cmd))
+    app.add_handler(CommandHandler("today",   today_cmd))
+    app.add_handler(CommandHandler("all",     all_cmd))
+    app.add_handler(CommandHandler("delete",  delete_cmd))
+    app.add_handler(CommandHandler("done",    done_cmd))
+    app.add_handler(CommandHandler("clear",   clear_cmd))
+    app.add_handler(CommandHandler("summary", summary_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
