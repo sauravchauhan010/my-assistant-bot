@@ -324,7 +324,7 @@ async def background_loop(app: Application):
                 )
                 db.mark_reminder_sent(item["id"], item["reminder_type"])
 
-            if now_ist.hour == 22 and now_ist.minute == 0:
+            if now_ist.hour == 10 and now_ist.minute == 0:
                 today_str = now_ist.strftime("%Y-%m-%d")
                 if daily_summary_sent_date != today_str:
                     daily_summary_sent_date = today_str
